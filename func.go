@@ -159,11 +159,14 @@ func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 	case *ssa.Builtin, *ssa.Parameter:
 		return ast.NewIdent(value.Name()), nil
 	case *ssa.Global:
+		globalExpr := &ast.UnaryExpr{Op: token.AND}
 		newName := ast.NewIdent(fc.nameTransformer(value.Name()))
 		if pkgIdent := fc.importNameResolver(value.Pkg.Pkg); pkgIdent != nil {
-			return ah.SelectExpr(pkgIdent, newName), nil
+			globalExpr.X = ah.SelectExpr(pkgIdent, newName)
+		} else {
+			globalExpr.X = newName
 		}
-		return newName, nil
+		return globalExpr, nil
 	case *ssa.Function:
 		newName := ast.NewIdent(fc.nameTransformer(value.Name()))
 		if pkgIdent := fc.importNameResolver(value.Pkg.Pkg); pkgIdent != nil {
