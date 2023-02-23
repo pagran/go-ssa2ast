@@ -154,13 +154,47 @@ func (fc *FuncConverter) gotoStmt(blockIdx int) *ast.BranchStmt {
 	}
 }
 
+func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, error) {
+	callFunExpr, err := fc.convertSsaValue(callCommon.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	hasRecv := callCommon.Signature().Recv() != nil
+
+	callExpr := ah.CallExpr(callFunExpr)
+	args := callCommon.Args
+	if hasRecv {
+		args = args[1:]
+	}
+	for _, arg := range args {
+		argExpr, err := fc.convertSsaValue(arg)
+		if err != nil {
+			return nil, err
+		}
+		callExpr.Args = append(callExpr.Args, argExpr)
+	}
+	if hasRecv {
+		recvExpr, err := fc.convertSsaValue(callCommon.Args[0])
+		if err != nil {
+			return nil, err
+		}
+		funcIdent, ok := callExpr.Fun.(*ast.Ident)
+		if !ok {
+			return nil, fmt.Errorf("non ident %v func with recv: %w", callExpr.Fun, UnsupportedErr)
+		}
+		callExpr.Fun = ah.SelectExpr(recvExpr, funcIdent)
+	}
+	return callExpr, nil
+}
+
 func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 	switch value := ssaValue.(type) {
 	case *ssa.Builtin, *ssa.Parameter:
 		return ast.NewIdent(value.Name()), nil
 	case *ssa.Global:
 		globalExpr := &ast.UnaryExpr{Op: token.AND}
-		newName := ast.NewIdent(fc.nameTransformer(value.Name()))
+		newName := ast.NewIdent(value.Name())
 		if pkgIdent := fc.importNameResolver(value.Pkg.Pkg); pkgIdent != nil {
 			globalExpr.X = ah.SelectExpr(pkgIdent, newName)
 		} else {
@@ -168,9 +202,11 @@ func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 		}
 		return globalExpr, nil
 	case *ssa.Function:
-		newName := ast.NewIdent(fc.nameTransformer(value.Name()))
-		if pkgIdent := fc.importNameResolver(value.Pkg.Pkg); pkgIdent != nil {
-			return ah.SelectExpr(pkgIdent, newName), nil
+		newName := ast.NewIdent(value.Name())
+		if value.Signature.Recv() == nil {
+			if pkgIdent := fc.importNameResolver(value.Pkg.Pkg); pkgIdent != nil {
+				return ah.SelectExpr(pkgIdent, newName), nil
+			}
 		}
 		return newName, nil
 	case *ssa.Const:
@@ -279,19 +315,11 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 				Y:  yExpr,
 			})
 		case *ssa.Call:
-			callFunExpr, err := fc.convertSsaValue(i.Call.Value)
+			callFunExpr, err := fc.convertCall(i.Call)
 			if err != nil {
 				return err
 			}
-			callExpr := ah.CallExpr(callFunExpr)
-			for _, arg := range i.Call.Args {
-				argExpr, err := fc.convertSsaValue(arg)
-				if err != nil {
-					return err
-				}
-				callExpr.Args = append(callExpr.Args, argExpr)
-			}
-			stmt = defineVar(i, callExpr)
+			stmt = defineVar(i, callFunExpr)
 		case *ssa.ChangeInterface:
 			castExpr, err := fc.castCallExpr(i.Type(), i.X)
 			if err != nil {
@@ -311,17 +339,9 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 			stmt = defineVar(i, castExpr)
 		case *ssa.Defer:
-			callFunExpr, err := fc.convertSsaValue(i.Call.Value)
+			callExpr, err := fc.convertCall(i.Call)
 			if err != nil {
 				return err
-			}
-			callExpr := ah.CallExpr(callFunExpr)
-			for _, arg := range i.Call.Args {
-				argExpr, err := fc.convertSsaValue(arg)
-				if err != nil {
-					return err
-				}
-				callExpr.Args = append(callExpr.Args, argExpr)
 			}
 			stmt = &ast.DeferStmt{Call: callExpr}
 		case *ssa.Extract:
@@ -343,19 +363,10 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 				X:  ah.SelectExpr(ast.NewIdent(i.X.Name()), ast.NewIdent(fieldName)),
 			})
 		case *ssa.Go:
-			callFunExpr, err := fc.convertSsaValue(i.Call.Value)
+			callExpr, err := fc.convertCall(i.Call)
 			if err != nil {
 				return err
 			}
-			callExpr := ah.CallExpr(callFunExpr)
-			for _, arg := range i.Call.Args {
-				argExpr, err := fc.convertSsaValue(arg)
-				if err != nil {
-					return err
-				}
-				callExpr.Args = append(callExpr.Args, argExpr)
-			}
-
 			stmt = &ast.GoStmt{Call: callExpr}
 		case *ssa.Index:
 			xExpr, err := fc.convertSsaValue(i.X)

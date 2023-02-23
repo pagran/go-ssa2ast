@@ -68,8 +68,10 @@ const funcSrc = `
 package main
 
 import (
-	"time"
-	"encoding/binary"
+"encoding/binary"
+"time"
+
+
 )
 
 func dummy(int, int) int  {
@@ -90,9 +92,17 @@ type testStruct struct {
 	A, B string
 }
 
+func (testStruct) Test(arg string) string  {
+	return "hello" + arg
+}
+
 var VariableStr string = "test"
 
 func main() {
+	tst := testStruct{}
+	println(tst.Test("hello"))
+	go tst.Test("go")
+	defer tst.Test("defer")
 	println(binary.LittleEndian)
 	x := &VariableStr
 	println(*x)
