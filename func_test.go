@@ -103,6 +103,10 @@ func (testStruct) Test(arg string) string  {
 var VariableStr string = "test"
 
 func main() {
+	var test []int
+
+	test = append(test, 1, 2, 3, 4)
+
 	binary.Size(0)
 
 	var intrf interfaceA

@@ -201,6 +201,9 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 		}
 		callExpr.Args = append(callExpr.Args, argExpr)
 	}
+	if callCommon.Signature().Variadic() {
+		callExpr.Ellipsis = 1
+	}
 	return callExpr, nil
 }
 
