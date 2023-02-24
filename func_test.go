@@ -78,6 +78,10 @@ func dummy(int, int) int  {
  return 0
 }
 
+func dummy1() int  {
+ return 0
+}
+
 type interfaceA interface {
 	Test() bool
 }
@@ -99,7 +103,13 @@ func (testStruct) Test(arg string) string  {
 var VariableStr string = "test"
 
 func main() {
+	binary.Size(0)
+
+	var intrf interfaceA
+	println(intrf.Test())
+	
 	tst := testStruct{}
+	println(dummy1())
 	println(tst.Test("hello"))
 	go tst.Test("go")
 	defer tst.Test("defer")

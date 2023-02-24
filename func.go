@@ -155,35 +155,51 @@ func (fc *FuncConverter) gotoStmt(blockIdx int) *ast.BranchStmt {
 }
 
 func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, error) {
-	callFunExpr, err := fc.convertSsaValue(callCommon.Value)
-	if err != nil {
-		return nil, err
+	callExpr := &ast.CallExpr{}
+	argsOffset := 0
+
+	if !callCommon.IsInvoke() {
+		switch val := callCommon.Value.(type) {
+		case *ssa.Function:
+			hasRecv := val.Signature.Recv() != nil
+			methodName := ast.NewIdent(val.Name())
+			if !hasRecv {
+				if pkgIdent := fc.importNameResolver(val.Pkg.Pkg); pkgIdent != nil {
+					callExpr.Fun = ah.SelectExpr(pkgIdent, methodName)
+				} else {
+					callExpr.Fun = methodName
+				}
+			} else {
+				argsOffset = 1
+				recvExpr, err := fc.convertSsaValue(callCommon.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				callExpr.Fun = ah.SelectExpr(recvExpr, methodName)
+			}
+		case *ssa.Builtin:
+			callExpr.Fun = ast.NewIdent(val.Name())
+		default:
+			callFunExpr, err := fc.convertSsaValue(val)
+			if err != nil {
+				return nil, err
+			}
+			callExpr.Fun = callFunExpr
+		}
+	} else {
+		recvExpr, err := fc.convertSsaValue(callCommon.Value)
+		if err != nil {
+			return nil, err
+		}
+		callExpr.Fun = ah.SelectExpr(recvExpr, ast.NewIdent(callCommon.Method.Name()))
 	}
 
-	hasRecv := callCommon.Signature().Recv() != nil
-
-	callExpr := ah.CallExpr(callFunExpr)
-	args := callCommon.Args
-	if hasRecv {
-		args = args[1:]
-	}
-	for _, arg := range args {
+	for _, arg := range callCommon.Args[argsOffset:] {
 		argExpr, err := fc.convertSsaValue(arg)
 		if err != nil {
 			return nil, err
 		}
 		callExpr.Args = append(callExpr.Args, argExpr)
-	}
-	if hasRecv {
-		recvExpr, err := fc.convertSsaValue(callCommon.Args[0])
-		if err != nil {
-			return nil, err
-		}
-		funcIdent, ok := callExpr.Fun.(*ast.Ident)
-		if !ok {
-			return nil, fmt.Errorf("non ident %v func with recv: %w", callExpr.Fun, UnsupportedErr)
-		}
-		callExpr.Fun = ah.SelectExpr(recvExpr, funcIdent)
 	}
 	return callExpr, nil
 }
@@ -217,7 +233,12 @@ func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return constExpr, nil
+
+		castExpr, err := fc.tc.Convert(value.Type())
+		if err != nil {
+			return nil, err
+		}
+		return ah.CallExpr(castExpr, constExpr), nil
 	case *ssa.FreeVar:
 		return nil, fmt.Errorf("free variable: %w", UnsupportedErr)
 	default:
