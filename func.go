@@ -256,7 +256,7 @@ type register interface {
 }
 
 func (fc *FuncConverter) tupleVarName(reg ssa.Value, idx int) string {
-	return fc.nameTransformer(fmt.Sprintf("%s_%d", reg.Name(), idx))
+	return fc.nameTransformer(fmt.Sprintf("%s_%d", fc.nameTransformer(reg.Name()), idx))
 }
 
 func (fc *FuncConverter) tupleVarNameAndType(reg ssa.Value, idx int) (name string, typ types.Type, hasRefs bool) {
@@ -297,7 +297,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 
 		localVar := true
 		for _, refInstr := range *refs {
-			if refInstr.Block() != ssaBlock {
+			if _, ok := refInstr.(*ssa.Phi); ok || refInstr.Block() != ssaBlock {
 				localVar = false
 			}
 		}
