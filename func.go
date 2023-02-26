@@ -83,15 +83,8 @@ type AstBlock struct {
 }
 
 type AstFunc struct {
-	Vars      map[string]types.Type
-	Constants map[string]constant.Value
-	Blocks    []*AstBlock
-}
-
-func (a *AstFunc) addConstant(val any) string {
-	name := fmt.Sprintf("const%d", len(a.Constants))
-	a.Constants[name] = constant.Make(val)
-	return name
+	Vars   map[string]types.Type
+	Blocks []*AstBlock
 }
 
 func isVoidType(typ types.Type) bool {
@@ -840,9 +833,8 @@ func (fc *FuncConverter) Convert(ssaFunc *ssa.Function) (*ast.FuncDecl, error) {
 		return nil, fmt.Errorf("anonymous functions: %w", UnsupportedErr)
 	}
 	f := &AstFunc{
-		Vars:      make(map[string]types.Type),
-		Constants: make(map[string]constant.Value),
-		Blocks:    make([]*AstBlock, len(ssaFunc.Blocks)),
+		Vars:   make(map[string]types.Type),
+		Blocks: make([]*AstBlock, len(ssaFunc.Blocks)),
 	}
 	for i := range f.Blocks {
 		f.Blocks[i] = &AstBlock{}
@@ -899,20 +891,6 @@ func (fc *FuncConverter) Convert(ssaFunc *ssa.Function) (*ast.FuncDecl, error) {
 			Tok:   token.VAR,
 			Specs: specs,
 		}})
-	}
-
-	for name, val := range f.Constants {
-		constExpr, err := constToAst(val)
-		if err != nil {
-			return nil, err
-		}
-		stmts = append(stmts, &ast.DeclStmt{Decl: &ast.GenDecl{
-			Tok: token.CONST,
-			Specs: []ast.Spec{&ast.ValueSpec{
-				Names:  []*ast.Ident{ast.NewIdent(fc.nameTransformer(name))},
-				Values: []ast.Expr{constExpr},
-			}}},
-		})
 	}
 
 	for i, block := range f.Blocks {
