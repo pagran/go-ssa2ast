@@ -253,6 +253,10 @@ type register interface {
 	Name() string
 	Referrers() *[]ssa.Instruction
 	Type() types.Type
+
+	String() string
+	Parent() *ssa.Function
+	Pos() token.Pos
 }
 
 func (fc *FuncConverter) tupleVarName(reg ssa.Value, idx int) string {
@@ -293,6 +297,30 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 		refs := r.Referrers()
 		if refs == nil || len(*refs) == 0 {
 			return ah.AssignStmt(ast.NewIdent("_"), expr)
+		}
+
+		if tuple, ok := typ.(*types.Tuple); ok {
+			assignStmt := &ast.AssignStmt{Tok: token.DEFINE, Rhs: []ast.Expr{expr}}
+			localTuple := true
+			tmpVars := make(map[string]types.Type)
+
+			for i := 0; i < tuple.Len(); i++ {
+				name, typ, hasRefs := fc.tupleVarNameAndType(r, i)
+				tmpVars[name] = typ
+				if hasRefs {
+					localTuple = false
+				}
+				assignStmt.Lhs = append(assignStmt.Lhs, ast.NewIdent(name))
+			}
+
+			if !localTuple {
+				for n, t := range tmpVars {
+					astFunc.Vars[n] = t
+				}
+				assignStmt.Tok = token.ASSIGN
+			}
+
+			return assignStmt
 		}
 
 		localVar := true
