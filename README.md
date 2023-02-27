@@ -4,5 +4,5 @@ An experimental implementation of converting from [go/ssa](https://pkg.go.dev/go
 
 ## Known problems:
 
-- Anonymous functions/lambdas are **not** supported
 - Convert breaks "lazy" `for range` for map to go because there is no publicly available iterator for map
+- Generics not tested

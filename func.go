@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	ah "github.com/pagran/go-ssa2ast/internal/asthelper"
+	"golang.org/x/exp/slices"
 	"golang.org/x/tools/go/ssa"
 )
 
@@ -55,7 +56,7 @@ func NewFuncConverter(cfg *ConverterConfig) *FuncConverter {
 	}
 }
 
-func (fc *FuncConverter) convertSignature(name string, signature *types.Signature) (*ast.FuncDecl, error) {
+func (fc *FuncConverter) convertSignatureToFuncDecl(name string, signature *types.Signature) (*ast.FuncDecl, error) {
 	funcTypeDecl, err := fc.tc.Convert(signature)
 	if err != nil {
 		return nil, err
@@ -73,6 +74,14 @@ func (fc *FuncConverter) convertSignature(name string, signature *types.Signatur
 		funcDecl.Recv = &ast.FieldList{List: []*ast.Field{f}}
 	}
 	return funcDecl, nil
+}
+
+func (fc *FuncConverter) convertSignatureToFuncLit(signature *types.Signature) (*ast.FuncLit, error) {
+	funcTypeDecl, err := fc.tc.Convert(signature)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.FuncLit{Type: funcTypeDecl.(*ast.FuncType)}, nil
 }
 
 type AstBlock struct {
@@ -154,6 +163,17 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 	if !callCommon.IsInvoke() {
 		switch val := callCommon.Value.(type) {
 		case *ssa.Function:
+			if parent := val.Parent(); parent != nil {
+				anonFuncIdx := slices.Index(parent.AnonFuncs, val)
+				if anonFuncIdx < 0 {
+					return nil, fmt.Errorf("anon func %s for call not found", val.Name())
+				}
+
+				callExpr.Fun = ast.NewIdent(fc.getAnonFuncName(anonFuncIdx))
+
+				break
+			}
+
 			hasRecv := val.Signature.Recv() != nil
 			methodName := ast.NewIdent(val.Name())
 			if !hasRecv {
@@ -235,8 +255,6 @@ func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 			return nil, err
 		}
 		return ah.CallExpr(castExpr, constExpr), nil
-	case *ssa.FreeVar:
-		return nil, fmt.Errorf("free variable: %w", UnsupportedErr)
 	default:
 		return ast.NewIdent(fc.nameTransformer(value.Name())), nil
 	}
@@ -774,6 +792,26 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 					X:  valExpr,
 				})
 			}
+		case *ssa.MakeClosure:
+			anonFunc := i.Fn.(*ssa.Function)
+			anonFuncIdx := slices.Index(anonFunc.Parent().AnonFuncs, anonFunc)
+			if anonFuncIdx < 0 {
+				return fmt.Errorf("parent func for closure %s not found", anonFunc.Name())
+			}
+
+			callExpr := &ast.CallExpr{
+				Fun:  ast.NewIdent(fc.getAnonFuncName(anonFuncIdx)),
+				Args: nil,
+			}
+			for _, freeVar := range i.Bindings {
+				varExr, err := fc.convertSsaValue(freeVar)
+				if err != nil {
+					return err
+				}
+				callExpr.Args = append(callExpr.Args, varExr)
+			}
+
+			stmt = defineVar(i, callExpr)
 		case *ssa.RunDefers, *ssa.DebugRef:
 			// ignored
 			continue
@@ -828,10 +866,63 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 	return nil
 }
 
-func (fc *FuncConverter) Convert(ssaFunc *ssa.Function) (*ast.FuncDecl, error) {
-	if len(ssaFunc.AnonFuncs) != 0 {
-		return nil, fmt.Errorf("anonymous functions: %w", UnsupportedErr)
+func (fc *FuncConverter) getAnonFuncName(idx int) string {
+	return fc.nameTransformer(fmt.Sprintf("anonFunc%d", idx))
+}
+
+func (fc *FuncConverter) convertAnonFuncs(anonFuncs []*ssa.Function) ([]ast.Stmt, error) {
+	var stmts []ast.Stmt
+
+	for i, anonFunc := range anonFuncs {
+		anonLit, err := fc.convertSignatureToFuncLit(anonFunc.Signature)
+		if err != nil {
+			return nil, err
+		}
+		anonStmts, err := fc.convertToStmts(anonFunc)
+		if err != nil {
+			return nil, err
+		}
+		anonLit.Body = ah.BlockStmt(anonStmts...)
+
+		if len(anonFunc.FreeVars) == 0 {
+			anonStmts = append(anonStmts, &ast.AssignStmt{
+				Lhs: []ast.Expr{ast.NewIdent(fc.getAnonFuncName(i))},
+				Tok: token.DEFINE,
+				Rhs: []ast.Expr{anonLit},
+			})
+			continue
+		}
+
+		var closureVars []*types.Var
+		for _, freeVar := range anonFunc.FreeVars {
+			closureVars = append(closureVars, types.NewVar(token.NoPos, nil, freeVar.Name(), freeVar.Type()))
+		}
+
+		makeClosureType := types.NewSignatureType(nil, nil, nil, types.NewTuple(closureVars...), types.NewTuple(
+			types.NewVar(token.NoPos, nil, "", anonFunc.Signature),
+		), false)
+
+		makeClosureLit, err := fc.convertSignatureToFuncLit(makeClosureType)
+		if err != nil {
+			return nil, err
+		}
+		makeClosureLit.Body = ah.BlockStmt(&ast.ReturnStmt{Results: []ast.Expr{anonLit}})
+
+		stmts = append(stmts, &ast.AssignStmt{
+			Lhs: []ast.Expr{ast.NewIdent(fc.getAnonFuncName(i))},
+			Tok: token.DEFINE,
+			Rhs: []ast.Expr{makeClosureLit},
+		})
 	}
+	return stmts, nil
+}
+
+func (fc *FuncConverter) convertToStmts(ssaFunc *ssa.Function) ([]ast.Stmt, error) {
+	stmts, err := fc.convertAnonFuncs(ssaFunc.AnonFuncs)
+	if err != nil {
+		return nil, err
+	}
+
 	f := &AstFunc{
 		Vars:   make(map[string]types.Type),
 		Blocks: make([]*AstBlock, len(ssaFunc.Blocks)),
@@ -845,13 +936,6 @@ func (fc *FuncConverter) Convert(ssaFunc *ssa.Function) (*ast.FuncDecl, error) {
 			return nil, err
 		}
 	}
-
-	funcDecl, err := fc.convertSignature(ssaFunc.Name(), ssaFunc.Signature)
-	if err != nil {
-		return nil, err
-	}
-
-	var stmts []ast.Stmt
 
 	if len(f.Vars) > 0 {
 		groupedVar := make(map[types.Type][]string)
@@ -902,7 +986,18 @@ func (fc *FuncConverter) Convert(ssaFunc *ssa.Function) (*ast.FuncDecl, error) {
 			stmts = append(stmts, blockStmts)
 		}
 	}
+	return stmts, nil
+}
 
-	funcDecl.Body = ah.BlockStmt(stmts...)
+func (fc *FuncConverter) Convert(ssaFunc *ssa.Function) (*ast.FuncDecl, error) {
+	funcDecl, err := fc.convertSignatureToFuncDecl(ssaFunc.Name(), ssaFunc.Signature)
+	if err != nil {
+		return nil, err
+	}
+	funcStmts, err := fc.convertToStmts(ssaFunc)
+	if err != nil {
+		return nil, err
+	}
+	funcDecl.Body = ah.BlockStmt(funcStmts...)
 	return funcDecl, err
 }
