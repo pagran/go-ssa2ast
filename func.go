@@ -222,7 +222,7 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 
 func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 	switch value := ssaValue.(type) {
-	case *ssa.Builtin, *ssa.Parameter:
+	case *ssa.Builtin, *ssa.Parameter, *ssa.FreeVar:
 		return ast.NewIdent(value.Name()), nil
 	case *ssa.Global:
 		globalExpr := &ast.UnaryExpr{Op: token.AND}
@@ -411,19 +411,29 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			name := fc.tupleVarName(i.Tuple, i.Index)
 			stmt = defineVar(i, ast.NewIdent(name))
 		case *ssa.Field:
+			xExpr, err := fc.convertSsaValue(i.X)
+			if err != nil {
+				return err
+			}
+
 			fieldName, err := getFieldName(i.X.Type(), i.Field)
 			if err != nil {
 				return err
 			}
-			stmt = defineVar(i, ah.SelectExpr(ast.NewIdent(i.X.Name()), ast.NewIdent(fieldName)))
+			stmt = defineVar(i, ah.SelectExpr(xExpr, ast.NewIdent(fieldName)))
 		case *ssa.FieldAddr:
+			xExpr, err := fc.convertSsaValue(i.X)
+			if err != nil {
+				return err
+			}
+
 			fieldName, err := getFieldName(i.X.Type(), i.Field)
 			if err != nil {
 				return err
 			}
 			stmt = defineVar(i, &ast.UnaryExpr{
 				Op: token.AND,
-				X:  ah.SelectExpr(ast.NewIdent(i.X.Name()), ast.NewIdent(fieldName)),
+				X:  ah.SelectExpr(xExpr, ast.NewIdent(fieldName)),
 			})
 		case *ssa.Go:
 			callExpr, err := fc.convertCall(i.Call)
