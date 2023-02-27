@@ -796,11 +796,10 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 						X:  valExpr,
 					}},
 				}
+			} else if i.Op == token.MUL {
+				stmt = defineVar(i, &ast.StarExpr{X: valExpr})
 			} else {
-				stmt = defineVar(i, &ast.UnaryExpr{
-					Op: i.Op,
-					X:  valExpr,
-				})
+				stmt = defineVar(i, &ast.UnaryExpr{Op: i.Op, X: valExpr})
 			}
 		case *ssa.MakeClosure:
 			anonFunc := i.Fn.(*ssa.Function)
