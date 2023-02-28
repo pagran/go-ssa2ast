@@ -156,6 +156,18 @@ func (fc *FuncConverter) gotoStmt(blockIdx int) *ast.BranchStmt {
 	}
 }
 
+func (fc *FuncConverter) getAnonFunctionName(val *ssa.Function) (*ast.Ident, bool, error) {
+	parent := val.Parent()
+	if parent == nil {
+		return nil, false, nil
+	}
+	anonFuncIdx := slices.Index(parent.AnonFuncs, val)
+	if anonFuncIdx < 0 {
+		return nil, false, fmt.Errorf("anon func %s for call not found", val.Name())
+	}
+	return ast.NewIdent(fc.getAnonFuncName(anonFuncIdx)), true, nil
+}
+
 func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, error) {
 	callExpr := &ast.CallExpr{}
 	argsOffset := 0
@@ -163,14 +175,12 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 	if !callCommon.IsInvoke() {
 		switch val := callCommon.Value.(type) {
 		case *ssa.Function:
-			if parent := val.Parent(); parent != nil {
-				anonFuncIdx := slices.Index(parent.AnonFuncs, val)
-				if anonFuncIdx < 0 {
-					return nil, fmt.Errorf("anon func %s for call not found", val.Name())
-				}
-
-				callExpr.Fun = ast.NewIdent(fc.getAnonFuncName(anonFuncIdx))
-
+			anonFuncName, ok, err := fc.getAnonFunctionName(val)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				callExpr.Fun = anonFuncName
 				break
 			}
 
@@ -221,42 +231,51 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 }
 
 func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
-	switch value := ssaValue.(type) {
+	switch val := ssaValue.(type) {
 	case *ssa.Builtin, *ssa.Parameter, *ssa.FreeVar:
-		return ast.NewIdent(value.Name()), nil
+		return ast.NewIdent(val.Name()), nil
 	case *ssa.Global:
 		globalExpr := &ast.UnaryExpr{Op: token.AND}
-		newName := ast.NewIdent(value.Name())
-		if pkgIdent := fc.importNameResolver(value.Pkg.Pkg); pkgIdent != nil {
+		newName := ast.NewIdent(val.Name())
+		if pkgIdent := fc.importNameResolver(val.Pkg.Pkg); pkgIdent != nil {
 			globalExpr.X = ah.SelectExpr(pkgIdent, newName)
 		} else {
 			globalExpr.X = newName
 		}
 		return globalExpr, nil
 	case *ssa.Function:
-		newName := ast.NewIdent(value.Name())
-		if value.Signature.Recv() == nil {
-			if pkgIdent := fc.importNameResolver(value.Pkg.Pkg); pkgIdent != nil {
+
+		anonFuncName, ok, err := fc.getAnonFunctionName(val)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return anonFuncName, nil
+		}
+
+		newName := ast.NewIdent(val.Name())
+		if val.Signature.Recv() == nil {
+			if pkgIdent := fc.importNameResolver(val.Pkg.Pkg); pkgIdent != nil {
 				return ah.SelectExpr(pkgIdent, newName), nil
 			}
 		}
 		return newName, nil
 	case *ssa.Const:
-		if value.Value == nil {
+		if val.Value == nil {
 			return ast.NewIdent("nil"), nil
 		}
-		constExpr, err := constToAst(value.Value)
+		constExpr, err := constToAst(val.Value)
 		if err != nil {
 			return nil, err
 		}
 
-		castExpr, err := fc.tc.Convert(value.Type())
+		castExpr, err := fc.tc.Convert(val.Type())
 		if err != nil {
 			return nil, err
 		}
 		return ah.CallExpr(castExpr, constExpr), nil
 	default:
-		return ast.NewIdent(fc.nameTransformer(value.Name())), nil
+		return ast.NewIdent(fc.nameTransformer(val.Name())), nil
 	}
 }
 
@@ -803,15 +822,16 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 		case *ssa.MakeClosure:
 			anonFunc := i.Fn.(*ssa.Function)
-			anonFuncIdx := slices.Index(anonFunc.Parent().AnonFuncs, anonFunc)
-			if anonFuncIdx < 0 {
-				return fmt.Errorf("parent func for closure %s not found", anonFunc.Name())
+
+			anonFuncName, ok, err := fc.getAnonFunctionName(anonFunc)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("make closure for non anon func %s: %w", anonFunc.Name(), UnsupportedErr)
 			}
 
-			callExpr := &ast.CallExpr{
-				Fun:  ast.NewIdent(fc.getAnonFuncName(anonFuncIdx)),
-				Args: nil,
-			}
+			callExpr := &ast.CallExpr{Fun: anonFuncName}
 			for _, freeVar := range i.Bindings {
 				varExr, err := fc.convertSsaValue(freeVar)
 				if err != nil {
@@ -894,7 +914,7 @@ func (fc *FuncConverter) convertAnonFuncs(anonFuncs []*ssa.Function) ([]ast.Stmt
 		anonLit.Body = ah.BlockStmt(anonStmts...)
 
 		if len(anonFunc.FreeVars) == 0 {
-			anonStmts = append(anonStmts, &ast.AssignStmt{
+			stmts = append(stmts, &ast.AssignStmt{
 				Lhs: []ast.Expr{ast.NewIdent(fc.getAnonFuncName(i))},
 				Tok: token.DEFINE,
 				Rhs: []ast.Expr{anonLit},
