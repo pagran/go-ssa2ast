@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"go/types"
 	"sort"
+	"strings"
 
 	ah "github.com/pagran/go-ssa2ast/internal/asthelper"
 	"golang.org/x/exp/slices"
@@ -186,6 +187,11 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 
 			hasRecv := val.Signature.Recv() != nil
 			methodName := ast.NewIdent(val.Name())
+			// TODO: review this
+			if val.TypeParams().Len() != 0 {
+				methodName.Name = methodName.Name[:strings.IndexRune(methodName.Name, '[')]
+			}
+
 			if !hasRecv {
 				if pkgIdent := fc.importNameResolver(val.Pkg.Pkg); pkgIdent != nil {
 					callExpr.Fun = ah.SelectExpr(pkgIdent, methodName)
