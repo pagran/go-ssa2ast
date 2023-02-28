@@ -156,16 +156,16 @@ func (fc *FuncConverter) gotoStmt(blockIdx int) *ast.BranchStmt {
 	}
 }
 
-func (fc *FuncConverter) getAnonFunctionName(val *ssa.Function) (*ast.Ident, bool, error) {
+func (fc *FuncConverter) getAnonFunctionName(val *ssa.Function) (*ast.Ident, error) {
 	parent := val.Parent()
 	if parent == nil {
-		return nil, false, nil
+		return nil, nil
 	}
 	anonFuncIdx := slices.Index(parent.AnonFuncs, val)
 	if anonFuncIdx < 0 {
-		return nil, false, fmt.Errorf("anon func %s for call not found", val.Name())
+		return nil, fmt.Errorf("anon func %s for call not found", val.Name())
 	}
-	return ast.NewIdent(fc.getAnonFuncName(anonFuncIdx)), true, nil
+	return ast.NewIdent(fc.getAnonFuncName(anonFuncIdx)), nil
 }
 
 func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, error) {
@@ -175,11 +175,11 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 	if !callCommon.IsInvoke() {
 		switch val := callCommon.Value.(type) {
 		case *ssa.Function:
-			anonFuncName, ok, err := fc.getAnonFunctionName(val)
+			anonFuncName, err := fc.getAnonFunctionName(val)
 			if err != nil {
 				return nil, err
 			}
-			if ok {
+			if anonFuncName != nil {
 				callExpr.Fun = anonFuncName
 				break
 			}
@@ -244,12 +244,11 @@ func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 		}
 		return globalExpr, nil
 	case *ssa.Function:
-
-		anonFuncName, ok, err := fc.getAnonFunctionName(val)
+		anonFuncName, err := fc.getAnonFunctionName(val)
 		if err != nil {
 			return nil, err
 		}
-		if ok {
+		if anonFuncName != nil {
 			return anonFuncName, nil
 		}
 
@@ -826,12 +825,11 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 		case *ssa.MakeClosure:
 			anonFunc := i.Fn.(*ssa.Function)
-
-			anonFuncName, ok, err := fc.getAnonFunctionName(anonFunc)
+			anonFuncName, err := fc.getAnonFunctionName(anonFunc)
 			if err != nil {
 				return err
 			}
-			if !ok {
+			if anonFuncName == nil {
 				return fmt.Errorf("make closure for non anon func %s: %w", anonFunc.Name(), UnsupportedErr)
 			}
 
