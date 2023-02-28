@@ -27,6 +27,13 @@ func (tc *typeConverter) Convert(t types.Type) (ast.Expr, error) {
 			Elt: eltExpr,
 		}, nil
 	case *types.Basic:
+		if typ.Kind() == types.UnsafePointer {
+			unsafePkgIdent := tc.resolver(types.Unsafe)
+			if unsafePkgIdent == nil {
+				return nil, fmt.Errorf("cannot resolve unsafe package")
+			}
+			return &ast.SelectorExpr{X: unsafePkgIdent, Sel: ast.NewIdent("Pointer")}, nil
+		}
 		return ast.NewIdent(typ.Name()), nil
 	case *types.Chan:
 		chanValueExpr, err := tc.Convert(typ.Elem())
