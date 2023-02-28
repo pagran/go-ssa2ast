@@ -269,6 +269,10 @@ func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 			return nil, err
 		}
 
+		if val.Value.Kind() != constant.Int {
+			return constExpr, nil
+		}
+
 		castExpr, err := fc.tc.Convert(val.Type())
 		if err != nil {
 			return nil, err
