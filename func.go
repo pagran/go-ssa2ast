@@ -207,7 +207,16 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 				callExpr.Fun = ah.SelectExpr(recvExpr, methodName)
 			}
 		case *ssa.Builtin:
-			callExpr.Fun = ast.NewIdent(val.Name())
+			name := val.Name()
+			if _, ok := types.Unsafe.Scope().Lookup(name).(*types.Builtin); ok {
+				unsafePkgIdent := fc.importNameResolver(types.Unsafe)
+				if unsafePkgIdent == nil {
+					return nil, fmt.Errorf("cannot resolve unsafe package")
+				}
+				callExpr.Fun = &ast.SelectorExpr{X: unsafePkgIdent, Sel: ast.NewIdent(name)}
+			} else {
+				callExpr.Fun = ast.NewIdent(name)
+			}
 		default:
 			callFunExpr, err := fc.convertSsaValue(val)
 			if err != nil {
@@ -333,13 +342,8 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 		if isVoidType(typ) {
 			return &ast.ExprStmt{X: expr}
 		}
-		refs := r.Referrers()
-		if refs == nil || len(*refs) == 0 {
-			return ah.AssignStmt(ast.NewIdent("_"), expr)
-		}
-
 		if tuple, ok := typ.(*types.Tuple); ok {
-			assignStmt := &ast.AssignStmt{Tok: token.DEFINE, Rhs: []ast.Expr{expr}}
+			assignStmt := &ast.AssignStmt{Tok: token.ASSIGN, Rhs: []ast.Expr{expr}}
 			localTuple := true
 			tmpVars := make(map[string]types.Type)
 
@@ -356,10 +360,14 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 				for n, t := range tmpVars {
 					astFunc.Vars[n] = t
 				}
-				assignStmt.Tok = token.ASSIGN
 			}
 
 			return assignStmt
+		}
+
+		refs := r.Referrers()
+		if refs == nil || len(*refs) == 0 {
+			return ah.AssignStmt(ast.NewIdent("_"), expr)
 		}
 
 		localVar := true
@@ -743,6 +751,12 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 			if i.High != nil {
 				sliceExpr.High, err = fc.convertSsaValue(i.High)
+				if err != nil {
+					return err
+				}
+			}
+			if i.Max != nil {
+				sliceExpr.Max, err = fc.convertSsaValue(i.Max)
 				if err != nil {
 					return err
 				}
