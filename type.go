@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"reflect"
 	"strconv"
 )
 
@@ -83,11 +84,21 @@ func (tc *typeConverter) Convert(t types.Type) (ast.Expr, error) {
 		}
 		return &ast.MapType{Key: keyExpr, Value: valueExpr}, nil
 	case *types.Named:
+		obj := typ.Obj()
+
+		// TODO: rewrite struct inlining without reflection hack
+		if parent := obj.Parent(); parent != nil {
+			isFuncScope := reflect.ValueOf(parent).Elem().FieldByName("isFunc")
+			if isFuncScope.Bool() {
+				return tc.Convert(obj.Type().Underlying())
+			}
+		}
+
 		var namedExpr ast.Expr
-		if pkgIdent := tc.resolver(typ.Obj().Pkg()); pkgIdent != nil {
-			namedExpr = &ast.SelectorExpr{X: pkgIdent, Sel: ast.NewIdent(typ.Obj().Name())}
+		if pkgIdent := tc.resolver(obj.Pkg()); pkgIdent != nil {
+			namedExpr = &ast.SelectorExpr{X: pkgIdent, Sel: ast.NewIdent(obj.Name())}
 		} else {
-			namedExpr = ast.NewIdent(typ.Obj().Name())
+			namedExpr = ast.NewIdent(obj.Name())
 		}
 
 		if typeParams := typ.TypeArgs(); typeParams != nil && typeParams.Len() > 0 {

@@ -200,7 +200,7 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 				}
 			} else {
 				argsOffset = 1
-				recvExpr, err := fc.convertSsaValue(callCommon.Args[0])
+				recvExpr, err := fc.convertSsaArgumentValue(callCommon.Args[0])
 				if err != nil {
 					return nil, err
 				}
@@ -233,7 +233,7 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 	}
 
 	for _, arg := range callCommon.Args[argsOffset:] {
-		argExpr, err := fc.convertSsaValue(arg)
+		argExpr, err := fc.convertSsaArgumentValue(arg)
 		if err != nil {
 			return nil, err
 		}
@@ -245,7 +245,15 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 	return callExpr, nil
 }
 
+func (fc *FuncConverter) convertSsaArgumentValue(ssaValue ssa.Value) (ast.Expr, error) {
+	return fc.ssaValue(ssaValue, true)
+}
+
 func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
+	return fc.ssaValue(ssaValue, false)
+}
+
+func (fc *FuncConverter) ssaValue(ssaValue ssa.Value, explicitNil bool) (ast.Expr, error) {
 	switch val := ssaValue.(type) {
 	case *ssa.Builtin, *ssa.Parameter, *ssa.FreeVar:
 		return ast.NewIdent(val.Name()), nil
@@ -275,16 +283,24 @@ func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 		}
 		return newName, nil
 	case *ssa.Const:
+		var constExpr ast.Expr
 		if val.Value == nil {
-			return ast.NewIdent("nil"), nil
-		}
-		constExpr, err := constToAst(val.Value)
-		if err != nil {
-			return nil, err
+			constExpr = ast.NewIdent("nil")
+			if !explicitNil {
+				return constExpr, nil
+			}
+		} else {
+			tmpConstExpr, err := constToAst(val.Value)
+			if err != nil {
+				return nil, err
+			}
+			constExpr = tmpConstExpr
 		}
 
-		if val.Value.Kind() != constant.Int {
-			return constExpr, nil
+		if basicType, ok := val.Type().(*types.Basic); ok {
+			if basicType.Info()&(types.IsString|types.IsUntyped) != 0 {
+				return constExpr, nil
+			}
 		}
 
 		castExpr, err := fc.tc.Convert(val.Type())
@@ -535,7 +551,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 			makeExpr := ah.CallExprByName("make", chanExpr)
 			if i.Size != nil {
-				reserveExpr, err := fc.convertSsaValue(i.Size)
+				reserveExpr, err := fc.convertSsaArgumentValue(i.Size)
 				if err != nil {
 					return err
 				}
@@ -555,7 +571,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 			makeExpr := ah.CallExprByName("make", mapExpr)
 			if i.Reserve != nil {
-				reserveExpr, err := fc.convertSsaValue(i.Reserve)
+				reserveExpr, err := fc.convertSsaArgumentValue(i.Reserve)
 				if err != nil {
 					return err
 				}
@@ -855,7 +871,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 
 			callExpr := &ast.CallExpr{Fun: anonFuncName}
 			for _, freeVar := range i.Bindings {
-				varExr, err := fc.convertSsaValue(freeVar)
+				varExr, err := fc.convertSsaArgumentValue(freeVar)
 				if err != nil {
 					return err
 				}
