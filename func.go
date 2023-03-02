@@ -17,7 +17,15 @@ import (
 
 var UnsupportedErr = errors.New("unsupported")
 
-type NameTransformer func(name string) string
+type NameType int
+
+const (
+	VarName NameType = iota
+	ParamName
+	LabelName
+)
+
+type NameTransformer func(name string, nameType NameType) string
 type ImportNameResolver func(pkg *types.Package) *ast.Ident
 
 type ConverterConfig struct {
@@ -32,7 +40,7 @@ func DefaultConfig() *ConverterConfig {
 	}
 }
 
-func defaultNameTransformer(name string) string {
+func defaultNameTransformer(name string, _ NameType) string {
 	return name
 }
 
@@ -53,7 +61,7 @@ func NewFuncConverter(cfg *ConverterConfig) *FuncConverter {
 	return &FuncConverter{
 		nameTransformer:    cfg.NameTransformer,
 		importNameResolver: cfg.ImportNameResolver,
-		tc:                 &typeConverter{resolver: cfg.ImportNameResolver},
+		tc:                 &typeConverter{resolver: cfg.ImportNameResolver, nameTransformer: cfg.NameTransformer},
 	}
 }
 
@@ -147,7 +155,7 @@ func (fc *FuncConverter) castCallExpr(typ types.Type, x ssa.Value) (*ast.CallExp
 }
 
 func (fc *FuncConverter) getLabelName(blockIdx int) *ast.Ident {
-	return ast.NewIdent(fc.nameTransformer(fmt.Sprintf("l%d", blockIdx)))
+	return ast.NewIdent(fc.nameTransformer(fmt.Sprintf("l%d", blockIdx), LabelName))
 }
 
 func (fc *FuncConverter) gotoStmt(blockIdx int) *ast.BranchStmt {
@@ -193,11 +201,14 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 			}
 
 			if !hasRecv {
-				if pkgIdent := fc.importNameResolver(val.Pkg.Pkg); pkgIdent != nil {
-					callExpr.Fun = ah.SelectExpr(pkgIdent, methodName)
-				} else {
-					callExpr.Fun = methodName
+				if val.Pkg != nil {
+					if pkgIdent := fc.importNameResolver(val.Pkg.Pkg); pkgIdent != nil {
+						callExpr.Fun = ah.SelectExpr(pkgIdent, methodName)
+						break
+					}
 				}
+
+				callExpr.Fun = methodName
 			} else {
 				argsOffset = 1
 				recvExpr, err := fc.convertSsaArgumentValue(callCommon.Args[0])
@@ -255,7 +266,7 @@ func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 
 func (fc *FuncConverter) ssaValue(ssaValue ssa.Value, explicitNil bool) (ast.Expr, error) {
 	switch val := ssaValue.(type) {
-	case *ssa.Builtin, *ssa.Parameter, *ssa.FreeVar:
+	case *ssa.Builtin:
 		return ast.NewIdent(val.Name()), nil
 	case *ssa.Global:
 		globalExpr := &ast.UnaryExpr{Op: token.AND}
@@ -308,8 +319,10 @@ func (fc *FuncConverter) ssaValue(ssaValue ssa.Value, explicitNil bool) (ast.Exp
 			return nil, err
 		}
 		return ah.CallExpr(castExpr, constExpr), nil
+	case *ssa.Parameter, *ssa.FreeVar:
+		return ast.NewIdent(fc.nameTransformer(val.Name(), ParamName)), nil
 	default:
-		return ast.NewIdent(fc.nameTransformer(val.Name())), nil
+		return ast.NewIdent(fc.nameTransformer(val.Name(), VarName)), nil
 	}
 }
 
@@ -324,7 +337,7 @@ type register interface {
 }
 
 func (fc *FuncConverter) tupleVarName(reg ssa.Value, idx int) string {
-	return fc.nameTransformer(fmt.Sprintf("%s_%d", fc.nameTransformer(reg.Name()), idx))
+	return fmt.Sprintf("%s_%d", fc.nameTransformer(reg.Name(), VarName), idx)
 }
 
 func (fc *FuncConverter) tupleVarNameAndType(reg ssa.Value, idx int) (name string, typ types.Type, hasRefs bool) {
@@ -393,7 +406,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 		}
 
-		newName := fc.nameTransformer(r.Name())
+		newName := fc.nameTransformer(r.Name(), VarName)
 		assignStmt := ah.AssignDefineStmt(ast.NewIdent(newName), expr)
 		if !localVar {
 			assignStmt.Tok = token.ASSIGN
@@ -646,11 +659,11 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 				stmt = &ast.AssignStmt{
 					Lhs: []ast.Expr{ast.NewIdent(okName), ast.NewIdent(keyName), ast.NewIdent(valName)},
 					Tok: token.ASSIGN,
-					Rhs: []ast.Expr{ah.CallExprByName(fc.nameTransformer(i.Iter.Name()))},
+					Rhs: []ast.Expr{ah.CallExprByName(fc.nameTransformer(i.Iter.Name(), VarName))},
 				}
 			}
 		case *ssa.Phi:
-			phiName := fc.nameTransformer(i.Name())
+			phiName := fc.nameTransformer(i.Name(), VarName)
 			astFunc.Vars[phiName] = i.Type()
 
 			for predIdx, edge := range i.Edges {
@@ -934,7 +947,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 }
 
 func (fc *FuncConverter) getAnonFuncName(idx int) string {
-	return fc.nameTransformer(fmt.Sprintf("anonFunc%d", idx))
+	return fc.nameTransformer(fmt.Sprintf("anonFunc%d", idx), VarName)
 }
 
 func (fc *FuncConverter) convertAnonFuncs(anonFuncs []*ssa.Function) ([]ast.Stmt, error) {
@@ -1057,6 +1070,10 @@ func (fc *FuncConverter) convertToStmts(ssaFunc *ssa.Function) ([]ast.Stmt, erro
 }
 
 func (fc *FuncConverter) Convert(ssaFunc *ssa.Function) (*ast.FuncDecl, error) {
+	if ssaFunc.Signature.TypeParams() != nil || ssaFunc.Signature.RecvTypeParams() != nil {
+		return nil, UnsupportedErr
+	}
+
 	funcDecl, err := fc.convertSignatureToFuncDecl(ssaFunc.Name(), ssaFunc.Signature)
 	if err != nil {
 		return nil, err
