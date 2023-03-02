@@ -151,7 +151,7 @@ func (fc *FuncConverter) castCallExpr(typ types.Type, x ssa.Value) (*ast.CallExp
 	if err != nil {
 		return nil, err
 	}
-	return ah.CallExpr(castExpr, valExpr), nil
+	return ah.CallExpr(&ast.ParenExpr{X: castExpr}, valExpr), nil
 }
 
 func (fc *FuncConverter) getLabelName(blockIdx int) *ast.Ident {
