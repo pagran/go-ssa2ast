@@ -211,7 +211,7 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 				callExpr.Fun = methodName
 			} else {
 				argsOffset = 1
-				recvExpr, err := fc.convertSsaArgumentValue(callCommon.Args[0])
+				recvExpr, err := fc.convertSsaValue(callCommon.Args[0])
 				if err != nil {
 					return nil, err
 				}
@@ -244,7 +244,7 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 	}
 
 	for _, arg := range callCommon.Args[argsOffset:] {
-		argExpr, err := fc.convertSsaArgumentValue(arg)
+		argExpr, err := fc.convertSsaValue(arg)
 		if err != nil {
 			return nil, err
 		}
@@ -256,12 +256,12 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 	return callExpr, nil
 }
 
-func (fc *FuncConverter) convertSsaArgumentValue(ssaValue ssa.Value) (ast.Expr, error) {
-	return fc.ssaValue(ssaValue, true)
+func (fc *FuncConverter) convertSsaValueNonExplicitNil(ssaValue ssa.Value) (ast.Expr, error) {
+	return fc.ssaValue(ssaValue, false)
 }
 
 func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
-	return fc.ssaValue(ssaValue, false)
+	return fc.ssaValue(ssaValue, true)
 }
 
 func (fc *FuncConverter) ssaValue(ssaValue ssa.Value, explicitNil bool) (ast.Expr, error) {
@@ -286,13 +286,32 @@ func (fc *FuncConverter) ssaValue(ssaValue ssa.Value, explicitNil bool) (ast.Exp
 			return anonFuncName, nil
 		}
 
-		newName := ast.NewIdent(val.Name())
-		if val.Signature.Recv() == nil {
+		const thunkPrefix = "$thunk"
+		if strings.HasSuffix(val.Name(), thunkPrefix) {
+			thunkType, ok := val.Object().Type().Underlying().(*types.Signature)
+			if !ok {
+				return nil, fmt.Errorf("unsupported thunk type: %w", UnsupportedErr)
+			}
+			recvVar := thunkType.Recv()
+			if recvVar == nil {
+				return nil, fmt.Errorf("unsupported non method thunk: %w", UnsupportedErr)
+			}
+
+			thunkTypeAst, err := fc.tc.Convert(recvVar.Type())
+			if err != nil {
+				return nil, err
+			}
+			trimmedName := ast.NewIdent(strings.TrimSuffix(val.Name(), thunkPrefix))
+			return ah.SelectExpr(&ast.ParenExpr{X: thunkTypeAst}, trimmedName), nil
+		}
+
+		name := ast.NewIdent(val.Name())
+		if val.Signature.Recv() == nil && val.Pkg != nil {
 			if pkgIdent := fc.importNameResolver(val.Pkg.Pkg); pkgIdent != nil {
-				return ah.SelectExpr(pkgIdent, newName), nil
+				return ah.SelectExpr(pkgIdent, name), nil
 			}
 		}
-		return newName, nil
+		return name, nil
 	case *ssa.Const:
 		var constExpr ast.Expr
 		if val.Value == nil {
@@ -318,7 +337,7 @@ func (fc *FuncConverter) ssaValue(ssaValue ssa.Value, explicitNil bool) (ast.Exp
 		if err != nil {
 			return nil, err
 		}
-		return ah.CallExpr(castExpr, constExpr), nil
+		return ah.CallExpr(&ast.ParenExpr{X: castExpr}, constExpr), nil
 	case *ssa.Parameter, *ssa.FreeVar:
 		return ast.NewIdent(fc.nameTransformer(val.Name(), ParamName)), nil
 	default:
@@ -362,6 +381,11 @@ func (fc *FuncConverter) tupleVarNameAndType(reg ssa.Value, idx int) (name strin
 		name = "_"
 	}
 	return
+}
+
+func isNilValue(value ssa.Value) bool {
+	constVal, ok := value.(*ssa.Const)
+	return ok && constVal.Value == nil
 }
 
 func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock, astBlock *AstBlock) error {
@@ -429,14 +453,22 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 			stmt = defineVar(i, ah.CallExprByName("new", varExpr))
 		case *ssa.BinOp:
-			xExpr, err := fc.convertSsaValue(i.X)
+			xExpr, err := fc.convertSsaValueNonExplicitNil(i.X)
 			if err != nil {
 				return err
 			}
-			yExpr, err := fc.convertSsaValue(i.Y)
+
+			var yExpr ast.Expr
+			// Handle special case: if nil == nil
+			if isNilValue(i.X) && isNilValue(i.Y) {
+				yExpr, err = fc.convertSsaValue(i.Y)
+			} else {
+				yExpr, err = fc.convertSsaValueNonExplicitNil(i.Y)
+			}
 			if err != nil {
 				return err
 			}
+
 			stmt = defineVar(i, &ast.BinaryExpr{
 				X:  xExpr,
 				Op: i.Op,
@@ -564,7 +596,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 			makeExpr := ah.CallExprByName("make", chanExpr)
 			if i.Size != nil {
-				reserveExpr, err := fc.convertSsaArgumentValue(i.Size)
+				reserveExpr, err := fc.convertSsaValue(i.Size)
 				if err != nil {
 					return err
 				}
@@ -584,7 +616,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 			makeExpr := ah.CallExprByName("make", mapExpr)
 			if i.Reserve != nil {
-				reserveExpr, err := fc.convertSsaArgumentValue(i.Reserve)
+				reserveExpr, err := fc.convertSsaValue(i.Reserve)
 				if err != nil {
 					return err
 				}
@@ -716,6 +748,8 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 			}
 
 			var stmts []ast.Stmt
+
+			recvIndex := 0
 			for idx, state := range i.States {
 				chanExpr, err := fc.convertSsaValue(state.Chan)
 				if err != nil {
@@ -731,11 +765,12 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 					}
 					commStmt = &ast.SendStmt{Chan: chanExpr, Value: valueExpr}
 				case types.RecvOnly:
-					valName, valType, valHasRefs := fc.tupleVarNameAndType(i, reservedTupleIdx+idx)
+					valName, valType, valHasRefs := fc.tupleVarNameAndType(i, reservedTupleIdx+recvIndex)
 					if valHasRefs {
 						astFunc.Vars[valName] = valType
 					}
 					commStmt = ah.AssignStmt(ast.NewIdent(valName), &ast.UnaryExpr{Op: token.ARROW, X: chanExpr})
+					recvIndex++
 				default:
 					return fmt.Errorf("not suuported select chan dir %d: %w", state.Dir, UnsupportedErr)
 				}
@@ -884,7 +919,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 
 			callExpr := &ast.CallExpr{Fun: anonFuncName}
 			for _, freeVar := range i.Bindings {
-				varExr, err := fc.convertSsaArgumentValue(freeVar)
+				varExr, err := fc.convertSsaValue(freeVar)
 				if err != nil {
 					return err
 				}

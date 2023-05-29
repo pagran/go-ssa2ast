@@ -97,6 +97,9 @@ func (tc *typeConverter) Convert(t types.Type) (ast.Expr, error) {
 
 		var namedExpr ast.Expr
 		if pkgIdent := tc.resolver(obj.Pkg()); pkgIdent != nil {
+			if !token.IsExported(obj.Name()) {
+				return nil, fmt.Errorf("reference to unexported named: %w", UnsupportedErr)
+			}
 			namedExpr = &ast.SelectorExpr{X: pkgIdent, Sel: ast.NewIdent(obj.Name())}
 		} else {
 			namedExpr = ast.NewIdent(obj.Name())
