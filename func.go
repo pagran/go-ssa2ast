@@ -193,6 +193,15 @@ func (fc *FuncConverter) convertCall(callCommon ssa.CallCommon) (*ast.CallExpr, 
 				break
 			}
 
+			thunkCall, err := fc.getThunkMethodCall(val)
+			if err != nil {
+				return nil, err
+			}
+			if thunkCall != nil {
+				callExpr.Fun = thunkCall
+				break
+			}
+
 			hasRecv := val.Signature.Recv() != nil
 			methodName := ast.NewIdent(val.Name())
 			// TODO: review this
@@ -264,6 +273,28 @@ func (fc *FuncConverter) convertSsaValue(ssaValue ssa.Value) (ast.Expr, error) {
 	return fc.ssaValue(ssaValue, true)
 }
 
+func (fc *FuncConverter) getThunkMethodCall(val *ssa.Function) (ast.Expr, error) {
+	const thunkPrefix = "$thunk"
+	if !strings.HasSuffix(val.Name(), thunkPrefix) {
+		return nil, nil
+	}
+	thunkType, ok := val.Object().Type().Underlying().(*types.Signature)
+	if !ok {
+		return nil, fmt.Errorf("unsupported thunk type: %w", UnsupportedErr)
+	}
+	recvVar := thunkType.Recv()
+	if recvVar == nil {
+		return nil, fmt.Errorf("unsupported non method thunk: %w", UnsupportedErr)
+	}
+
+	thunkTypeAst, err := fc.tc.Convert(recvVar.Type())
+	if err != nil {
+		return nil, err
+	}
+	trimmedName := ast.NewIdent(strings.TrimSuffix(val.Name(), thunkPrefix))
+	return ah.SelectExpr(&ast.ParenExpr{X: thunkTypeAst}, trimmedName), nil
+}
+
 func (fc *FuncConverter) ssaValue(ssaValue ssa.Value, explicitNil bool) (ast.Expr, error) {
 	switch val := ssaValue.(type) {
 	case *ssa.Builtin:
@@ -286,23 +317,12 @@ func (fc *FuncConverter) ssaValue(ssaValue ssa.Value, explicitNil bool) (ast.Exp
 			return anonFuncName, nil
 		}
 
-		const thunkPrefix = "$thunk"
-		if strings.HasSuffix(val.Name(), thunkPrefix) {
-			thunkType, ok := val.Object().Type().Underlying().(*types.Signature)
-			if !ok {
-				return nil, fmt.Errorf("unsupported thunk type: %w", UnsupportedErr)
-			}
-			recvVar := thunkType.Recv()
-			if recvVar == nil {
-				return nil, fmt.Errorf("unsupported non method thunk: %w", UnsupportedErr)
-			}
-
-			thunkTypeAst, err := fc.tc.Convert(recvVar.Type())
-			if err != nil {
-				return nil, err
-			}
-			trimmedName := ast.NewIdent(strings.TrimSuffix(val.Name(), thunkPrefix))
-			return ah.SelectExpr(&ast.ParenExpr{X: thunkTypeAst}, trimmedName), nil
+		thunkCall, err := fc.getThunkMethodCall(val)
+		if err != nil {
+			return nil, err
+		}
+		if thunkCall != nil {
+			return thunkCall, nil
 		}
 
 		name := ast.NewIdent(val.Name())

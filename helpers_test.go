@@ -6,6 +6,9 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io/fs"
+	"path/filepath"
+	"strings"
 
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
@@ -56,9 +59,9 @@ func findFunc(file *ast.File, funcName string) (funcDecl *ast.FuncDecl) {
 	return
 }
 
-func mustParseFile(src string) (*ast.File, *types.Info, *token.FileSet, *types.Package) {
+func mustParseFile(fileName string) (*ast.File, *token.FileSet, *types.Info, *types.Package) {
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "main.go", src, 0)
+	f, err := parser.ParseFile(fset, fileName, nil, 0)
 	if err != nil {
 		panic(err)
 	}
@@ -77,5 +80,31 @@ func mustParseFile(src string) (*ast.File, *types.Info, *token.FileSet, *types.P
 	if err != nil {
 		panic(err)
 	}
-	return f, info, fset, pkg
+	return f, fset, info, pkg
+}
+
+func mustParseDirectory(dir string) ([]*ast.File, []string, *token.FileSet) {
+	var files []*ast.File
+	var fileNames []string
+	fset := token.NewFileSet()
+	err := filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		files = append(files, f)
+		fileNames = append(fileNames, filepath.Base(path))
+		return nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return files, fileNames, fset
 }
