@@ -94,6 +94,7 @@ func (fc *FuncConverter) convertSignatureToFuncLit(signature *types.Signature) (
 }
 
 type AstBlock struct {
+	Index   int
 	HasRefs bool
 	Body    []ast.Stmt
 	Phi     []ast.Stmt
@@ -724,7 +725,7 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 					return err
 				}
 
-				blockIdx := i.Block().Preds[predIdx].Index
+				blockIdx := ssaBlock.Preds[predIdx].Index
 				astFunc.Blocks[blockIdx].Phi = append(astFunc.Blocks[blockIdx].Phi, ah.AssignStmt(ast.NewIdent(phiName), edgeExpr))
 			}
 		case *ssa.Range:
@@ -962,11 +963,11 @@ func (fc *FuncConverter) convertBlock(astFunc *AstFunc, ssaBlock *ssa.BasicBlock
 	exitInstr := ssaBlock.Instrs[len(ssaBlock.Instrs)-1]
 	switch exit := exitInstr.(type) {
 	case *ssa.Jump:
-		targetBlockIdx := exit.Block().Succs[0].Index
+		targetBlockIdx := ssaBlock.Succs[0].Index
 		astBlock.Exit = fc.gotoStmt(targetBlockIdx)
 	case *ssa.If:
-		tblock := exit.Block().Succs[0].Index
-		fblock := exit.Block().Succs[1].Index
+		tblock := ssaBlock.Succs[0].Index
+		fblock := ssaBlock.Succs[1].Index
 
 		condExpr, err := fc.convertSsaValue(exit.Cond)
 		if err != nil {
@@ -1063,7 +1064,7 @@ func (fc *FuncConverter) convertToStmts(ssaFunc *ssa.Function) ([]ast.Stmt, erro
 		Blocks: make([]*AstBlock, len(ssaFunc.Blocks)),
 	}
 	for i := range f.Blocks {
-		f.Blocks[i] = &AstBlock{}
+		f.Blocks[i] = &AstBlock{Index: ssaFunc.Blocks[i].Index}
 	}
 
 	for i, ssaBlock := range ssaFunc.Blocks {
@@ -1090,7 +1091,6 @@ func (fc *FuncConverter) convertToStmts(ssaFunc *ssa.Function) ([]ast.Stmt, erro
 			}
 		}
 		var specs []ast.Spec
-
 		for varType, varNames := range groupedVar {
 			typeExpr, err := fc.tc.Convert(varType)
 			if err != nil {
@@ -1112,11 +1112,11 @@ func (fc *FuncConverter) convertToStmts(ssaFunc *ssa.Function) ([]ast.Stmt, erro
 		}})
 	}
 
-	for i, block := range f.Blocks {
+	for _, block := range f.Blocks {
 		blockStmts := &ast.BlockStmt{List: append(block.Body, block.Phi...)}
 		blockStmts.List = append(blockStmts.List, block.Exit)
 		if block.HasRefs {
-			stmts = append(stmts, &ast.LabeledStmt{Label: fc.getLabelName(i), Stmt: blockStmts})
+			stmts = append(stmts, &ast.LabeledStmt{Label: fc.getLabelName(block.Index), Stmt: blockStmts})
 		} else {
 			stmts = append(stmts, blockStmts)
 		}
