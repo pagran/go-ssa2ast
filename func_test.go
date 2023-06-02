@@ -5,19 +5,20 @@ import (
 	"go/importer"
 	"go/printer"
 	"go/types"
-	"golang.org/x/tools/go/ast/astutil"
-	"golang.org/x/tools/go/ssa"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/ssa"
 
 	"github.com/google/go-cmp/cmp"
 	"golang.org/x/tools/go/ssa/ssautil"
 )
 
 func Test_convertSignature(t *testing.T) {
-	conv := NewFuncConverter(DefaultConfig())
+	conv := newFuncConverter(DefaultConfig())
 
 	f, _, info, _ := mustParseFile("testdata/func/sig.go")
 	for _, funcName := range []string{"plainStructFunc", "plainStructAnonFunc", "genericStructFunc", "plainFuncSignature", "genericFuncSignature"} {
@@ -54,10 +55,6 @@ func Test_Convert(t *testing.T) {
 		panic(err)
 	}
 
-	conv := NewFuncConverter(DefaultConfig())
-
-	tmpDir := t.TempDir()
-
 	for fIdx, decl := range file.Decls {
 		funcDecl, ok := decl.(*ast.FuncDecl)
 		if !ok {
@@ -67,14 +64,14 @@ func Test_Convert(t *testing.T) {
 		path, _ := astutil.PathEnclosingInterval(file, funcDecl.Pos(), funcDecl.Pos())
 		ssaFunc := ssa.EnclosingFunction(ssaPkg, path)
 
-		astFunc, err := conv.Convert(ssaFunc)
+		astFunc, err := Convert(ssaFunc, DefaultConfig())
 		if err != nil {
 			panic(err)
 		}
 		file.Decls[fIdx] = astFunc
 	}
 
-	convertedFile := filepath.Join(tmpDir, "main.go")
+	convertedFile := filepath.Join(".tmp", "main.go")
 	f, err := os.Create(convertedFile)
 	if err != nil {
 		panic(err)

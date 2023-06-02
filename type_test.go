@@ -11,7 +11,7 @@ func Test_typeToExpr(t *testing.T) {
 	f, _, info, _ := mustParseFile("testdata/types/types.go")
 	name, structAst := findStruct(f, "exampleStruct")
 	obj := info.Defs[name]
-	fc := &typeConverter{resolver: defaultImportNameResolver, nameTransformer: defaultNameTransformer}
+	fc := &typeConverter{resolver: defaultImportNameResolver}
 	convAst, err := fc.Convert(obj.Type().Underlying())
 	if err != nil {
 		t.Fatal(err)

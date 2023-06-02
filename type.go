@@ -10,8 +10,7 @@ import (
 )
 
 type typeConverter struct {
-	resolver        ImportNameResolver
-	nameTransformer NameTransformer
+	resolver ImportNameResolver
 }
 
 func (tc *typeConverter) Convert(t types.Type) (ast.Expr, error) {
@@ -158,7 +157,7 @@ func (tc *typeConverter) Convert(t types.Type) (ast.Expr, error) {
 				}
 				f := &ast.Field{Type: paramType}
 				if name := param.Name(); name != "" {
-					f.Names = []*ast.Ident{ast.NewIdent(tc.nameTransformer(name, ParamName))}
+					f.Names = []*ast.Ident{ast.NewIdent(name)}
 				}
 				funcSigExpr.Params.List = append(funcSigExpr.Params.List, f)
 			}
@@ -175,7 +174,7 @@ func (tc *typeConverter) Convert(t types.Type) (ast.Expr, error) {
 
 				f := &ast.Field{Type: resultExpr}
 				if name := result.Name(); name != "" {
-					f.Names = []*ast.Ident{ast.NewIdent(tc.nameTransformer(name, ParamName))}
+					f.Names = []*ast.Ident{ast.NewIdent(name)}
 				}
 				funcSigExpr.Results.List = append(funcSigExpr.Results.List, f)
 			}
