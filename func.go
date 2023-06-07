@@ -342,6 +342,19 @@ func (fc *funcConverter) ssaValue(ssaValue ssa.Value, explicitNil bool) (ast.Exp
 	case *ssa.Const:
 		var constExpr ast.Expr
 		if val.Value == nil {
+			// handle nil constant for non-pointer structs
+			typ := val.Type()
+			if _, ok := typ.(*types.Named); ok {
+				typ = typ.Underlying()
+			}
+			if _, ok := typ.(*types.Struct); ok {
+				typExpr, err := fc.tc.Convert(val.Type())
+				if err != nil {
+					return nil, err
+				}
+				return &ast.CompositeLit{Type: typExpr}, nil
+			}
+
 			constExpr = ast.NewIdent("nil")
 			if !explicitNil {
 				return constExpr, nil

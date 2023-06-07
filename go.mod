@@ -4,8 +4,8 @@ go 1.20
 
 require (
 	github.com/google/go-cmp v0.5.9
-	golang.org/x/exp v0.0.0-20230425010034-47ecfdc1ba53
-	golang.org/x/tools v0.8.0
+	golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1
+	golang.org/x/tools v0.9.3
 )
 
 require (
