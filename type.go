@@ -96,8 +96,18 @@ func (tc *typeConverter) Convert(t types.Type) (ast.Expr, error) {
 
 		var namedExpr ast.Expr
 		if pkgIdent := tc.resolver(obj.Pkg()); pkgIdent != nil {
+			// reference to unexported named emulated through new interface with explicit declarated methods
 			if !token.IsExported(obj.Name()) {
-				return nil, fmt.Errorf("reference to unexported named: %w", UnsupportedErr)
+				var methods []*types.Func
+				for i := 0; i < typ.NumMethods(); i++ {
+					method := typ.Method(i)
+					if token.IsExported(obj.Name()) {
+						methods = append(methods, method)
+					}
+				}
+
+				fakeInterface := types.NewInterfaceType(methods, nil)
+				return tc.Convert(fakeInterface)
 			}
 			namedExpr = &ast.SelectorExpr{X: pkgIdent, Sel: ast.NewIdent(obj.Name())}
 		} else {
