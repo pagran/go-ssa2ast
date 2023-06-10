@@ -101,7 +101,7 @@ func (tc *typeConverter) Convert(t types.Type) (ast.Expr, error) {
 				var methods []*types.Func
 				for i := 0; i < typ.NumMethods(); i++ {
 					method := typ.Method(i)
-					if token.IsExported(obj.Name()) {
+					if token.IsExported(method.Name()) {
 						methods = append(methods, method)
 					}
 				}
