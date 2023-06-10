@@ -71,7 +71,7 @@ func Test_Convert(t *testing.T) {
 		file.Decls[fIdx] = astFunc
 	}
 
-	convertedFile := filepath.Join(".tmp", "main.go")
+	convertedFile := filepath.Join(t.TempDir(), "main.go")
 	f, err := os.Create(convertedFile)
 	if err != nil {
 		panic(err)
